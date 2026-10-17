@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Последний рубеж — выживание</title>
+  <style>
+    *{box-sizing:border-box} body{margin:0;background:#101820;color:#f4f7f8;font:15px system-ui,Arial;overflow:hidden}
+    #game{display:block;width:100vw;height:100vh;background:#24382b;image-rendering:pixelated}
+    .panel{position:fixed;background:#101820df;border:1px solid #ffffff24;border-radius:12px;padding:12px 14px;backdrop-filter:blur(5px)}
+    #hud{top:12px;left:12px;min-width:230px;line-height:1.6}
+    #help{top:12px;right:12px;max-width:270px;line-height:1.6}
+    #status{bottom:14px;left:50%;transform:translateX(-50%);white-space:nowrap}
+    .bar{height:8px;background:#38444b;border-radius:9px;overflow:hidden;margin:3px 0 7px}
+    .fill{height:100%;width:100%;transition:width .15s}
+    #hp{background:#ff6b6b}#hunger{background:#ffd43b}
+    button{border:0;border-radius:8px;padding:8px 11px;margin:3px;background:#4dabf7;color:#06121a;font-weight:700;cursor:pointer}
+    button:disabled{opacity:.4;cursor:not-allowed}
+    #overlay{position:fixed;inset:0;background:#081014d9;display:flex;align-items:center;justify-content:center;text-align:center;padding:20px}
+    #overlay .box{max-width:500px;background:#18252b;border:1px solid #ffffff24;border-radius:18px;padding:28px}
+    #overlay h1{margin-top:0} #overlay button{font-size:17px;padding:12px 20px}
+    .muted{color:#b6c4ca;font-size:13px}
+    @media(max-width:650px){#help{top:auto;bottom:70px;right:8px;max-width:185px;font-size:12px}#hud{left:8px;top:8px;font-size:13px}#status{bottom:8px;font-size:12px}}
+  </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud" class="panel">
+  <b>🌲 ПОСЛЕДНИЙ РУБЕЖ</b>
+  <div>❤️ Здоровье <span id="hpText">100</span></div><div class="bar"><div id="hp" class="fill"></div></div>
+  <div>🍗 Сытость <span id="hungerText">100</span></div><div class="bar"><div id="hunger" class="fill"></div></div>
+  <div>🪵 Дерево: <b id="wood">0</b> &nbsp; 🍖 Еда: <b id="food">0</b></div>
+  <div>👥 Игроков: <b id="count">1</b></div>
+  <button id="eatBtn">Съесть еду (E)</button><button id="buildBtn">Баррикада (B) · 3🪵</button>
+</div>
+<div id="help" class="panel">
+  <b>Управление</b><br>WASD / стрелки — движение<br>Пробел / клик — удар<br>E — съесть еду<br>F — собрать ресурс<br>B — построить баррикаду<br><span class="muted">Играй вместе с друзьями по локальной сети.</span>
+</div>
+<div id="status" class="panel">Подключение к серверу…</div>
+<div id="overlay"><div class="box"><h1>🌘 Последний рубеж</h1><p>Собирай дерево и еду, отбивайся от зомби и выживай как можно дольше вместе с другими игроками.</p><p class="muted">Для мультиплеера сервер должен быть запущен. Открой эту страницу в нескольких вкладках или поделись адресом сервера в одной сети.</p><button id="startBtn">Начать выживание</button></div></div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+(() => {
+  const canvas = document.getElementById('game'), ctx = canvas.getContext('2d');
+  const socket = io();
+  let myId = null, world = {width:2200,height:1600};
+  let state = {players:[],resources:[],zombies:[],structures:[]};
+  const keys = new Set(); let active = false;
+  const status = document.getElementById('status');
+  const overlay = document.getElementById('overlay');
+  const hpText = document.getElementById('hpText'), hungerText = document.getElementById('hungerText');
+  function resize(){canvas.width=innerWidth*devicePixelRatio;canvas.height=innerHeight*devicePixelRatio;ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0)}
+  addEventListener('resize',resize); resize();
+  socket.on('connect',()=>{status.textContent='Сервер подключён';});
+  socket.on('disconnect',()=>{status.textContent='Нет соединения с сервером';});
+  socket.on('init',d=>{myId=d.id;world=d.world;});
+  socket.on('state',s=>{
+    state=s;
+    const me=state.players.find(p=>p.id===myId);
+    document.getElementById('count').textContent=state.players.length;
+    if(me){
+      hpText.textContent=Math.ceil(me.hp); hungerText.textContent=Math.ceil(me.hunger);
+      document.getElementById('hp').style.width=me.hp+'%';
+      document.getElementById('hunger').style.width=me.hunger+'%';
+      document.getElementById('wood').textContent=me.wood;
+      document.getElementById('food').textContent=me.food;
+      document.getElementById('eatBtn').disabled=me.food<=0||me.hp<=0;
+      document.getElementById('buildBtn').disabled=me.wood<3||me.hp<=0;
+      if(me.hp<=0){status.textContent='Ты погиб! Перезагрузи страницу, чтобы попробовать снова.';active=false;}
+      else if(active) status.textContent='Выживай! Ресурсы рядом подсвечены.';
+    }
+  });
+  document.getElementById('startBtn').onclick=()=>{active=true;overlay.style.display='none';canvas.focus();};
+  document.getElementById('eatBtn').onclick=()=>socket.emit('eat');
+  document.getElementById('buildBtn').onclick=()=>socket.emit('build');
+  addEventListener('keydown',e=>{
+    if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();
+    keys.add(e.key.toLowerCase());
+    if(e.repeat)return;
+    if(e.key===' '||e.key.toLowerCase()==='j')socket.emit('attack');
+    if(e.key.toLowerCase()==='e')socket.emit('eat');
+    if(e.key.toLowerCase()==='f')socket.emit('collect');
+    if(e.key.toLowerCase()==='b')socket.emit('build');
+  });
+  addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));
+  canvas.addEventListener('pointerdown',()=>{if(active)socket.emit('attack')});
+  setInterval(()=>{
+    if(!active)return;
+    let dx=0,dy=0;
+    if(keys.has('w')||keys.has('arrowup'))dy--;
+    if(keys.has('s')||keys.has('arrowdown'))dy++;
+    if(keys.has('a')||keys.has('arrowleft'))dx--;
+    if(keys.has('d')||keys.has('arrowright'))dx++;
+    if(dx||dy)socket.emit('move',{dx,dy});
+  },35);
+  function circle(x,y,r,color){ctx.fillStyle=color;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();}
+  function draw(){
+    requestAnimationFrame(draw);
+    const me=state.players.find(p=>p.id===myId);
+    const camX=me?Math.max(0,Math.min(world.width-innerWidth,me.x-innerWidth/2)):0;
+    const camY=me?Math.max(0,Math.min(world.height-innerHeight,me.y-innerHeight/2)):0;
+    ctx.clearRect(0,0,innerWidth,innerHeight);
+    ctx.fillStyle='#263c2c';ctx.fillRect(0,0,innerWidth,innerHeight);
+    // grass pattern
+    ctx.strokeStyle='#355239';ctx.lineWidth=1;
+    for(let x=-(camX%64);x<innerWidth;x+=64)for(let y=-(camY%64);y<innerHeight;y+=64){
+      ctx.beginPath();ctx.moveTo(x+7,y+9);ctx.lineTo(x+13,y+15);ctx.moveTo(x+42,y+39);ctx.lineTo(x+49,y+32);ctx.stroke();
+    }
+    ctx.strokeStyle='#6b795b';ctx.lineWidth=8;ctx.strokeRect(-camX,-camY,world.width,world.height);
+    for(const r of state.resources){
+      const x=r.x-camX,y=r.y-camY;if(x<-20||y<-20||x>innerWidth+20||y>innerHeight+20)continue;
+      if(r.type==='wood'){circle(x,y,10,'#9b6b3f');circle(x,y-5,7,'#3e8d50');circle(x-5,y,6,'#4c9c55');}
+      else{circle(x,y,8,'#e8a24c');circle(x-3,y-3,2,'#fff0b5');}
+    }
+    for(const b of state.structures){const x=b.x-camX,y=b.y-camY;ctx.fillStyle='#b88752';ctx.fillRect(x-13,y-7,26,14);ctx.strokeStyle='#684526';ctx.strokeRect(x-13,y-7,26,14);}
+    for(const z of state.zombies){const x=z.x-camX,y=z.y-camY;if(x<-30||y<-30||x>innerWidth+30||y>innerHeight+30)continue;circle(x,y,13,'#8cbd70');circle(x-4,y-2,2,'#1a281a');circle(x+4,y-2,2,'#1a281a');ctx.fillStyle='#e6e6b7';ctx.fillRect(x-7,y+7,14,3);}
+    for(const p of state.players){const x=p.x-camX,y=p.y-camY;if(x<-30||y<-30||x>innerWidth+30||y>innerHeight+30)continue;circle(x,y,13,p.color);circle(x-4,y-2,2,'#102020');circle(x+4,y-2,2,'#102020');ctx.font='12px system-ui';ctx.textAlign='center';ctx.fillStyle='#fff';ctx.fillText(p.id===myId?'Ты':p.name,x,y-20);if(p.hp<100){ctx.fillStyle='#492d2d';ctx.fillRect(x-14,y+17,28,4);ctx.fillStyle='#ff6b6b';ctx.fillRect(x-14,y+17,28*p.hp/100,4);}}
+    if(me&&active){
+      const near=state.resources.some(r=>Math.hypot(r.x-me.x,r.y-me.y)<42);
+      if(near){ctx.fillStyle='#fff';ctx.font='14px system-ui';ctx.textAlign='center';ctx.fillText('Нажми F, чтобы собрать',innerWidth/2,innerHeight-95);}
+      const znear=state.zombies.some(z=>Math.hypot(z.x-me.x,z.y-me.y)<78);
+      if(znear){ctx.fillStyle='#ffb4a2';ctx.font='14px system-ui';ctx.textAlign='center';ctx.fillText('Пробел или клик — атаковать',innerWidth/2,innerHeight-72);}
+    }
+  }
+  draw();
+})();
+</script>
+</body>
+</html>
